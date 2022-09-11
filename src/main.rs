@@ -1,13 +1,10 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{collections::HashMap, path::PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::Parser;
-use csv_async::AsyncDeserializer;
-use dashmap::DashMap;
-use futures::TryStreamExt;
+use csv::Reader;
 use rust_decimal::prelude::*;
 use serde::Deserialize;
-use tokio::fs::File;
 
 use coding_test::Account;
 
@@ -42,61 +39,51 @@ struct Args {
     transactions_filename: PathBuf,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     let args = Args::parse();
 
-    // stream transactions file
-    let transactions_file = File::open(&args.transactions_filename)
-        .await
-        .with_context(|| {
-            format!(
-                "Failed to read transactions from {}",
-                args.transactions_filename.display()
-            )
-        })?;
-    // create async csv deserializer
-    let mut reader = AsyncDeserializer::from_reader(transactions_file);
-    let records = reader.deserialize::<CsvTransaction>();
+    // create csv reader
+    let mut reader = Reader::from_path(&args.transactions_filename).with_context(|| {
+        format!(
+            "Failed to read transactions from {}",
+            args.transactions_filename.display()
+        )
+    })?;
 
-    let client_accounts = Arc::new(DashMap::new());
+    let mut client_accounts = HashMap::new();
 
     // process transactions
-    let fut = records.try_for_each_concurrent(None, |transaction| {
-        let client_accounts = client_accounts.clone();
-        async move {
-            // insert client account if it doesn't already exist
-            let mut account = client_accounts
-                .entry(transaction.client)
-                .or_insert(Account::new(transaction.client));
-            // process transaction
-            use CsvTransactionType::*;
-            match transaction.tx_type {
-                Deposit => account.deposit(
-                    transaction.txid,
-                    transaction
-                        .amount
-                        .expect("amount is required for deposit transactions"),
-                ),
-                Withdrawal => account.withdraw(
-                    transaction
-                        .amount
-                        .expect("amount is required for withdrawal transactions"),
-                ),
-                Dispute => account.dispute(transaction.txid),
-                Resolve => account.resolve(transaction.txid),
-                Chargeback => account.chargeback(transaction.txid),
-            };
-
-            Ok(())
-        }
-    });
-    fut.await?;
+    for transaction in reader.deserialize() {
+        let transaction: CsvTransaction =
+            transaction.with_context(|| "Failed to parse transaction from CSV row")?;
+        // insert client account if it doesn't already exist
+        let account = client_accounts
+            .entry(transaction.client)
+            .or_insert(Account::new(transaction.client));
+        // process transaction
+        use CsvTransactionType::*;
+        match transaction.tx_type {
+            Deposit => account.deposit(
+                transaction.txid,
+                transaction
+                    .amount
+                    .ok_or(anyhow!("amount is required for deposit transactions"))?,
+            ),
+            Withdrawal => account.withdraw(
+                transaction
+                    .amount
+                    .ok_or(anyhow!("amount is required for withdrawal transactions"))?,
+            ),
+            Dispute => account.dispute(transaction.txid),
+            Resolve => account.resolve(transaction.txid),
+            Chargeback => account.chargeback(transaction.txid),
+        };
+    }
 
     // print client accounts
     println!("client,available,held,total,locked");
-    for account in client_accounts.iter() {
-        println!("{}", *account);
+    for (_, account) in client_accounts.iter() {
+        println!("{}", account);
     }
 
     Ok(())
