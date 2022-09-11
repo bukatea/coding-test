@@ -2,9 +2,26 @@
 //!
 //! `accounts` is a library for describing and managing user accounts.
 
-use std::{collections::HashMap, fmt};
+use std::collections::HashMap;
 
 use rust_decimal::Decimal;
+use serde::Serialize;
+
+/// Serializable snapshot of the client's account
+#[derive(Serialize)]
+pub struct AccountSnapshot {
+    /// Client's ID
+    #[serde(rename = "client")]
+    pub id: u16,
+    /// Available balance
+    pub available: Decimal,
+    /// Held balance
+    pub held: Decimal,
+    /// Total balance
+    pub total: Decimal,
+    /// Locked status
+    pub locked: bool,
+}
 
 /// Client's account
 pub struct Account {
@@ -102,19 +119,16 @@ impl Account {
             }
         }
     }
-}
 
-impl fmt::Display for Account {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{},{:.4},{:.4},{:.4},{}",
-            self.id,
-            self.available,
-            self.held,
-            self.available + self.held,
-            self.locked
-        )
+    /// Get a snapshot of the account
+    pub fn snapshot(&self) -> AccountSnapshot {
+        AccountSnapshot {
+            id: self.id,
+            available: self.available,
+            held: self.held,
+            total: self.available + self.held,
+            locked: self.locked,
+        }
     }
 }
 

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::{collections::HashMap, io, path::PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;
@@ -80,11 +80,12 @@ fn main() -> Result<()> {
         };
     }
 
-    // print client accounts
-    println!("client,available,held,total,locked");
-    for (_, account) in client_accounts.iter() {
-        println!("{}", account);
+    // serialize client accounts as csv
+    let mut writer = csv::Writer::from_writer(io::stdout());
+    for account in client_accounts.values() {
+        writer.serialize(account.snapshot())?;
     }
+    writer.flush()?;
 
     Ok(())
 }
