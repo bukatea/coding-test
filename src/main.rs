@@ -1,12 +1,14 @@
-use std::{collections::HashMap, io, path::PathBuf};
+use std::{collections::HashMap, convert::TryFrom, io, path::PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use csv::Reader;
+use futures::future;
 use rust_decimal::prelude::*;
 use serde::Deserialize;
+use tokio::task::JoinError;
 
-use coding_test::Account;
+use coding_test::{Account, AccountHandler, Transaction};
 
 /// A transaction type represented by the CSV field `type`
 #[derive(Deserialize)]
@@ -30,6 +32,31 @@ struct CsvTransaction {
     amount: Option<Decimal>,
 }
 
+impl TryFrom<CsvTransaction> for Transaction {
+    type Error = anyhow::Error;
+
+    fn try_from(tx: CsvTransaction) -> Result<Self> {
+        use CsvTransactionType::*;
+        match tx.tx_type {
+            Deposit => {
+                let amount = tx
+                    .amount
+                    .ok_or(anyhow!("amount is required for deposit transactions"))?;
+                Ok(Transaction::Deposit(tx.txid, amount))
+            }
+            Withdrawal => {
+                let amount = tx
+                    .amount
+                    .ok_or(anyhow!("amount is required for withdraw transactions"))?;
+                Ok(Transaction::Withdrawal(amount))
+            }
+            Dispute => Ok(Transaction::Dispute(tx.txid)),
+            Resolve => Ok(Transaction::Resolve(tx.txid)),
+            Chargeback => Ok(Transaction::Chargeback(tx.txid)),
+        }
+    }
+}
+
 /// Transaction payments engine
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
@@ -39,7 +66,8 @@ struct Args {
     transactions_filename: PathBuf,
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let args = Args::parse();
 
     // create csv reader
@@ -50,39 +78,42 @@ fn main() -> Result<()> {
         )
     })?;
 
-    let mut client_accounts = HashMap::new();
+    let mut account_handler_futures = vec![];
+    let mut client_account_handlers = HashMap::new();
 
     // process transactions
     for transaction in reader.deserialize() {
         let transaction: CsvTransaction =
-            transaction.with_context(|| format!("Failed to parse transaction from CSV row"))?;
+            transaction.with_context(|| "Failed to parse transaction from CSV row")?;
         // insert client account if it doesn't already exist
-        let account = client_accounts
+        let account_handler = client_account_handlers
             .entry(transaction.client)
-            .or_insert(Account::new(transaction.client));
+            .or_insert_with(|| {
+                let account = Account::new(transaction.client);
+                let (account_handler, fut) = AccountHandler::new(account);
+                account_handler_futures.push(fut);
+                account_handler
+            });
         // process transaction
-        use CsvTransactionType::*;
-        match transaction.tx_type {
-            Deposit => account.deposit(
-                transaction.txid,
-                transaction
-                    .amount
-                    .ok_or(anyhow!("amount is required for deposit transactions"))?,
-            ),
-            Withdrawal => account.withdraw(
-                transaction
-                    .amount
-                    .ok_or(anyhow!("amount is required for withdrawal transactions"))?,
-            ),
-            Dispute => account.dispute(transaction.txid),
-            Resolve => account.resolve(transaction.txid),
-            Chargeback => account.chargeback(transaction.txid),
-        };
+        account_handler
+            .process(Transaction::try_from(transaction)?)
+            .with_context(|| "Failed to process transaction")??;
     }
+
+    // end processing of transactions
+    for account in client_account_handlers.values_mut() {
+        account.end_processing();
+    }
+
+    // wait for account handlers to finish processing
+    future::join_all(account_handler_futures)
+        .await
+        .into_iter()
+        .collect::<std::result::Result<Vec<_>, JoinError>>()?;
 
     // serialize client accounts as csv
     let mut writer = csv::Writer::from_writer(io::stdout());
-    for account in client_accounts.values() {
+    for account in client_account_handlers.values() {
         writer.serialize(account.snapshot())?;
     }
     writer.flush()?;

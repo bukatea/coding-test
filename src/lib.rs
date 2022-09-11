@@ -2,10 +2,18 @@
 //!
 //! `accounts` is a library for describing and managing user accounts.
 
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
+use futures::Future;
 use rust_decimal::Decimal;
 use serde::Serialize;
+use tokio::{
+    sync::mpsc::{self, error::SendError},
+    task::JoinError,
+};
 
 /// Serializable snapshot of the client's account
 #[derive(Serialize)]
@@ -21,6 +29,21 @@ pub struct AccountSnapshot {
     pub total: Decimal,
     /// Locked status
     pub locked: bool,
+}
+
+/// A transaction affecting a client's account
+#[derive(Debug)]
+pub enum Transaction {
+    /// Deposit funds into the account, requires txid and amount
+    Deposit(u32, Decimal),
+    /// Withdraw funds from the accout, requires amount
+    Withdrawal(Decimal),
+    /// Dispute transaction by txid
+    Dispute(u32),
+    /// Resolve transaction by txid
+    Resolve(u32),
+    /// Chargeback transaction by txid
+    Chargeback(u32),
 }
 
 /// Client's account
@@ -129,6 +152,61 @@ impl Account {
             total: self.available + self.held,
             locked: self.locked,
         }
+    }
+}
+
+/// Accounts handler
+pub struct AccountHandler {
+    /// Thread-safe account
+    account: Arc<Mutex<Account>>,
+    /// Transaction transmitter,
+    tx: Option<mpsc::UnboundedSender<Transaction>>,
+}
+
+impl AccountHandler {
+    /// Create a new account handler
+    pub fn new(account: Account) -> (Self, impl Future<Output = Result<(), JoinError>>) {
+        let (tx, mut rx) = mpsc::unbounded_channel::<Transaction>();
+        let account = Arc::new(Mutex::new(account));
+        let account_clone = account.clone();
+        let fut = tokio::spawn(async move {
+            while let Some(transaction) = rx.recv().await {
+                let mut account = account_clone.lock().unwrap();
+                use Transaction::*;
+                match transaction {
+                    Deposit(txid, amount) => account.deposit(txid, amount),
+                    Withdrawal(amount) => account.withdraw(amount),
+                    Dispute(txid) => account.dispute(txid),
+                    Resolve(txid) => account.resolve(txid),
+                    Chargeback(txid) => account.chargeback(txid),
+                }
+            }
+        });
+        (
+            Self {
+                account,
+                tx: Some(tx),
+            },
+            fut,
+        )
+    }
+
+    /// End processing of transactions to stabilize account state
+    pub fn end_processing(&mut self) {
+        self.tx.take();
+    }
+
+    /// Process transasction
+    pub fn process(
+        &mut self,
+        transaction: Transaction,
+    ) -> Option<Result<(), SendError<Transaction>>> {
+        self.tx.as_ref().map(|tx| tx.send(transaction))
+    }
+
+    /// Get a snapshot of the account
+    pub fn snapshot(&self) -> AccountSnapshot {
+        self.account.lock().unwrap().snapshot()
     }
 }
 
