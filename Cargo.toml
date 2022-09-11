@@ -9,13 +9,9 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.64"
 clap = { version = "3.2.20", features = ["derive"] }
-csv-async = { version = "1.2.4", features = ["tokio"] }
-dashmap = "5.4.0"
-futures = "0.3.24"
+csv = "1.1.6"
 rust_decimal = "1.26.1"
 serde = { version = "1.0.144", features = ["derive"] }
-tokio = { version = "1.21.0", features = ["full"] }
-tokio-stream = "0.1.9"
 
 [dev-dependencies]
 rust_decimal_macros = "1.26"
