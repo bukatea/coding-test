@@ -171,6 +171,9 @@ impl AccountHandler {
         let account_clone = account.clone();
         let fut = tokio::spawn(async move {
             while let Some(transaction) = rx.recv().await {
+                // since the only other user of the mutex is the `snapshot` method and it's
+                // nonpanicking, we can unwrap here
+                // https://doc.rust-lang.org/std/sync/struct.Mutex.html#method.lock
                 let mut account = account_clone.lock().unwrap();
                 use Transaction::*;
                 match transaction {
@@ -206,6 +209,9 @@ impl AccountHandler {
 
     /// Get a snapshot of the account
     pub fn snapshot(&self) -> AccountSnapshot {
+        // since the only other user of the mutex is the spawned `tokio` task and it's
+        // nonpanicking, we can unwrap here
+        // https://doc.rust-lang.org/std/sync/struct.Mutex.html#method.lock
         self.account.lock().unwrap().snapshot()
     }
 }
