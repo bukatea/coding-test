@@ -95,9 +95,11 @@ async fn main() -> Result<()> {
                 account_handler
             });
         // process transaction
+        // unwrapped because we know that processing has not ended
         account_handler
             .process(Transaction::try_from(transaction)?)
-            .with_context(|| "Failed to process transaction")??;
+            .with_context(|| "Failed to process transaction")
+            .unwrap()?;
     }
 
     // end processing of transactions
