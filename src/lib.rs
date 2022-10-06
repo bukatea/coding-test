@@ -83,7 +83,7 @@ impl Account {
         // only deposits can be disputed
         if let Some((amount, disputed)) = self.deposits.get_mut(&txid) {
             // if already disputed, ignore
-            if !*disputed {
+            if !*disputed && self.available >= *amount {
                 // hold funds
                 *disputed = true;
                 self.available -= *amount;
@@ -246,5 +246,15 @@ mod tests {
         assert_eq!(account.available, dec!(1.00));
         assert_eq!(account.held, dec!(0));
         assert_eq!(account.locked, false);
+    }
+
+    #[test]
+    fn dispute_more_than_balance_ignores() {
+        let mut account = Account::new(1);
+        account.deposit(1, dec!(1.00));
+        account.withdraw(dec!(1.00));
+        account.dispute(1);
+        assert_eq!(account.available, dec!(0));
+        assert_eq!(account.held, dec!(0));
     }
 }

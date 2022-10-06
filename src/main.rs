@@ -2,7 +2,7 @@ use std::{collections::HashMap, io, path::PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;
-use csv::Reader;
+use csv::ReaderBuilder;
 use rust_decimal::prelude::*;
 use serde::Deserialize;
 
@@ -43,12 +43,15 @@ fn main() -> Result<()> {
     let args = Args::parse();
 
     // create csv reader
-    let mut reader = Reader::from_path(&args.transactions_filename).with_context(|| {
-        format!(
-            "Failed to read transactions from {}",
-            args.transactions_filename.display()
-        )
-    })?;
+    let mut reader = ReaderBuilder::new()
+        .flexible(true)
+        .from_path(&args.transactions_filename)
+        .with_context(|| {
+            format!(
+                "Failed to read transactions from {}",
+                args.transactions_filename.display()
+            )
+        })?;
 
     let mut client_accounts = HashMap::new();
 
