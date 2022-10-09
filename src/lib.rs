@@ -80,9 +80,13 @@ impl Account {
 
     /// Dispute a transaction
     pub fn dispute(&mut self, txid: u32) {
+        // if locked, disallow disputes
+        if self.locked {
+            return;
+        }
         // only deposits can be disputed
         if let Some((amount, disputed)) = self.deposits.get_mut(&txid) {
-            // if already disputed, ignore
+            // if already disputed or if available balance cannot take a dispute, ignore
             if !*disputed && self.available >= *amount {
                 // hold funds
                 *disputed = true;
@@ -204,6 +208,16 @@ mod tests {
         let mut account = Account::new(1);
         account.deposit(1, dec!(1.00));
         account.dispute(2);
+        assert_eq!(account.available, dec!(1.00));
+        assert_eq!(account.held, dec!(0));
+    }
+
+    #[test]
+    fn dispute_from_locked_ignored() {
+        let mut account = Account::new(1);
+        account.deposit(1, dec!(1.00));
+        account.locked = true;
+        account.dispute(1);
         assert_eq!(account.available, dec!(1.00));
         assert_eq!(account.held, dec!(0));
     }
