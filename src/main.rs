@@ -1,14 +1,15 @@
-use std::{collections::HashMap, io, path::PathBuf};
+use std::{io, path::PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use csv::ReaderBuilder;
-use rust_decimal::prelude::*;
+use rust_decimal::Decimal;
+
 use serde::Deserialize;
 
-use coding_test::Account;
+use coding_test::{AccountsHandler, ClientId, Transaction, TransactionType, Txid};
 
-/// A transaction type represented by the CSV field `type`
+/// Transaction type represented by the CSV field `type`
 #[derive(Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum CsvTransactionType {
@@ -19,7 +20,7 @@ enum CsvTransactionType {
     Chargeback,
 }
 
-/// A transaction represented by a CSV row
+/// Transaction represented by a CSV row
 #[derive(Deserialize)]
 struct CsvTransaction {
     #[serde(rename = "type")]
@@ -28,6 +29,48 @@ struct CsvTransaction {
     #[serde(rename = "tx")]
     txid: u32,
     amount: Option<Decimal>,
+}
+
+// This abstraction of the two separate transaction types is necessary because of a limitation of
+// `csv::Deserialize` which does not allow to deserialize a field into an enum with heterogenous
+// variants. The best that can be done is
+// https://stackoverflow.com/questions/69417454/serialize-deserialize-csv-with-nested-enum-struct-with-serde-in-rust
+// but this only works for serializing and not for deserializing, as documented here:
+// github.com/BurntSushi/rust-csv/issues/211
+// Thus, we have to deserialize into a separate struct for each variant and then convert it into the
+// desired enum variant. This also allows us to do some basic validation of the CSV data, including
+// checking decimal precision of `amount` to 4 places.
+impl TryFrom<CsvTransaction> for Transaction {
+    type Error = anyhow::Error;
+
+    fn try_from(tx: CsvTransaction) -> Result<Self> {
+        use CsvTransactionType::*;
+        let amount = match tx.tx_type {
+            Deposit | Withdrawal => {
+                let amount = tx.amount.ok_or_else(|| {
+                    anyhow!("amount is required for deposit/withdraw transactions")
+                })?;
+                if amount.scale() > 4 {
+                    return Err(anyhow!("amount has more than 4 decimal places"));
+                }
+                amount
+            }
+            Dispute | Resolve | Chargeback => Decimal::ZERO,
+        };
+        let tx_type = match tx.tx_type {
+            Deposit => TransactionType::Deposit(amount),
+            Withdrawal => TransactionType::Withdrawal(amount),
+            Dispute => TransactionType::Dispute,
+            Resolve => TransactionType::Resolve,
+            Chargeback => TransactionType::Chargeback,
+        };
+
+        Ok(Self {
+            tx_type,
+            client_id: ClientId(tx.client),
+            txid: Txid(tx.txid),
+        })
+    }
 }
 
 /// Transaction payments engine
@@ -53,40 +96,24 @@ fn main() -> Result<()> {
             )
         })?;
 
-    let mut client_accounts = HashMap::new();
+    let mut accounts = AccountsHandler::new();
 
     // process transactions
     for transaction in reader.deserialize() {
         let transaction: CsvTransaction =
             transaction.with_context(|| "Failed to parse transaction from CSV row")?;
-        // insert client account if it doesn't already exist
-        let account = client_accounts
-            .entry(transaction.client)
-            .or_insert(Account::new(transaction.client));
         // process transaction
-        use CsvTransactionType::*;
-        match transaction.tx_type {
-            Deposit => account.deposit(
-                transaction.txid,
-                transaction
-                    .amount
-                    .ok_or(anyhow!("amount is required for deposit transactions"))?,
-            ),
-            Withdrawal => account.withdraw(
-                transaction
-                    .amount
-                    .ok_or(anyhow!("amount is required for withdrawal transactions"))?,
-            ),
-            Dispute => account.dispute(transaction.txid),
-            Resolve => account.resolve(transaction.txid),
-            Chargeback => account.chargeback(transaction.txid),
-        };
+        // ignore validation errors, including precision and missing amount
+        if let Ok(transaction) = Transaction::try_from(transaction) {
+            // ignore duplicate txid error
+            let _ = accounts.submit_transaction(transaction);
+        }
     }
 
     // serialize client accounts as csv
     let mut writer = csv::Writer::from_writer(io::stdout());
-    for account in client_accounts.values() {
-        writer.serialize(account.snapshot())?;
+    for snapshot in accounts.snapshot_accounts() {
+        writer.serialize(snapshot)?;
     }
     writer.flush()?;
 
