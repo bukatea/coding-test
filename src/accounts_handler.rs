@@ -27,7 +27,7 @@ impl AccountsHandler {
     /// Demultiplex a transaction by client id
     pub fn submit_transaction(&mut self, tx: Transaction) -> Result<(), String> {
         // ensure txid is unique
-        if !self.txids.insert(tx.txid) {
+        if tx.is_generative_tx() && !self.txids.insert(tx.txid) {
             return Err(format!("duplicate txid: {}", tx.txid));
         }
 

@@ -45,21 +45,20 @@ impl TryFrom<CsvTransaction> for Transaction {
 
     fn try_from(tx: CsvTransaction) -> Result<Self> {
         use CsvTransactionType::*;
-        let amount = match tx.tx_type {
-            Deposit | Withdrawal => {
-                let amount = tx.amount.ok_or_else(|| {
-                    anyhow!("amount is required for deposit/withdraw transactions")
-                })?;
+        let validate_amount = |amount: Option<Decimal>| {
+            if let Some(amount) = amount {
                 if amount.scale() > 4 {
-                    return Err(anyhow!("amount has more than 4 decimal places"));
+                    return Err(anyhow!("amount {} has more than 4 decimal places", amount));
                 }
-                amount
+                return Ok(amount);
             }
-            Dispute | Resolve | Chargeback => Decimal::ZERO,
+            Err(anyhow!(
+                "amount is required for deposit/withdraw transactions"
+            ))
         };
         let tx_type = match tx.tx_type {
-            Deposit => TransactionType::Deposit(amount),
-            Withdrawal => TransactionType::Withdrawal(amount),
+            Deposit => TransactionType::Deposit(validate_amount(tx.amount)?),
+            Withdrawal => TransactionType::Withdrawal(validate_amount(tx.amount)?),
             Dispute => TransactionType::Dispute,
             Resolve => TransactionType::Resolve,
             Chargeback => TransactionType::Chargeback,

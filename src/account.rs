@@ -18,19 +18,19 @@ pub(crate) struct DepositRecord {
 }
 
 /// Serializable snapshot of the client's account
-#[derive(Serialize)]
+#[derive(Debug, PartialEq, Eq, Hash, Serialize)]
 pub struct AccountSnapshot {
     /// Client's ID
     #[serde(rename = "client")]
-    id: ClientId,
+    pub id: ClientId,
     /// Available balance
-    available: Decimal,
+    pub available: Decimal,
     /// Held balance
-    held: Decimal,
+    pub held: Decimal,
     /// Total balance
-    total: Decimal,
+    pub total: Decimal,
     /// Locked status
-    locked: bool,
+    pub locked: bool,
 }
 
 /// Client's account
